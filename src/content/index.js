@@ -7,8 +7,8 @@ import {
   getSettings,
   on as storeOn,
   off as storeOff,
-  destroy as storeDestroy,
-  setup as storeSetup,
+  destroy as destroyStore,
+  setup as setupStore,
 } from '../store/store-content.js'
 import { eventDestroy } from '../config.js'
 import {isBlocklisted} from '../blocklist.js'
@@ -22,6 +22,10 @@ import {setup as setupPage, destroy as destroyPage} from './page/page-parent.js'
 import {setup as setupAttachments, destroy as destroyAttachments} from './attachments/attachments.js'
 import {setup as setupDashboardEvents, destroy as destroyDashboardEvents} from './dashboard-events-client.js'
 import {setup as setupInsertEvent, destroy as destroyInsertEvent} from './insert-template-event.js'
+import getEventTarget from './utils/event-target.js'
+import { isTextfieldEditor } from './editors/editor-textfield.js'
+import { isContentEditable } from './editors/editor-contenteditable.js'
+import getActiveElement from './utils/active-element.js'
 
 const readyMessage = 'briskine-ready'
 
@@ -38,47 +42,49 @@ function getParentUrl () {
   return url
 }
 
-async function init (settings) {
-  setupStatus()
-  setupDashboardEvents()
+async function init () {
+  initAbortController.abort()
+
+  const settings = await getSettings()
 
   if (isBlocklisted(settings, getParentUrl())) {
     return false
   }
 
-  await Promise.all([
-    storeSetup(),
+  await Promise.allSettled([
+    setupStore(),
     setupKeyboard(settings),
     setupBubble(settings),
     setupDialog(settings),
-
     setupPage(),
     setupAttachments(),
-
     setupInsertEvent(),
   ])
 
   // update the content components if settings change
   settingsCache = {...settings}
-  storeOn('users-updated', refreshContentScripts)
+  storeOn('users-updated', usersUpdated)
 
   window.postMessage(readyMessage)
 }
 
-let startupDelay = 500
+let initAbortController = new AbortController()
+
+function initOnFocus (e) {
+  const target = getEventTarget(e)
+  if (isTextfieldEditor(target) || isContentEditable(target)) {
+    init()
+  }
+}
+
 let startupRetries = 0
+const startupDelay = 500
 const maxStartupRetries = 10
-let destroyed = false
+const loadedProp = '__briskineLoaded'
 
 async function startup () {
   startupRetries = startupRetries + 1
-
   if (startupRetries > maxStartupRetries) {
-    return
-  }
-
-  // don't load on non html pages (json, xml, etc..)
-  if (document.contentType !== 'text/html') {
     return
   }
 
@@ -90,39 +96,60 @@ async function startup () {
 
   // use a custom property on the body,
   // to detect if the body was recreated (eg. in dynamically created iframes).
-  document.body._briskineLoaded = true
+  document.body[loadedProp] = true
 
-  const settings = await getSettings()
-  // check if we were destroyed while waiting for settings, or startupDelay
-  if (destroyed === false) {
-    init(settings)
+  setupStatus()
+  setupDashboardEvents()
 
-    setTimeout(() => {
-      // if the body was recreated,
-      // we'll retry initializing.
-      if (!document.body._briskineLoaded) {
-        startup()
-      }
-    }, startupDelay)
+  const options = {
+    capture: true,
+    signal: initAbortController.signal,
   }
+  window.addEventListener('focusin', initOnFocus, options)
+  // in case an editable is already focused
+  const activeElement = getActiveElement()
+  if (activeElement) {
+    initOnFocus({ target: activeElement })
+
+    // in case the activeElement is non-editable inside a shadow.
+    // without this check, changing focus to an editable inside the same shadow
+    // root won't trigger focusin on document
+    if (document.activeElement?.shadowRoot) {
+      document.activeElement.shadowRoot.addEventListener('focusin', initOnFocus, options)
+    }
+  }
+
+  setTimeout(() => {
+    // if the document was recreated (e.g., ckeditor4 dynamically crated iframe),
+    // we'll retry initializing.
+    if (!document.body[loadedProp]) {
+      return startup()
+    }
+
+    // cleanup
+    delete document.body[loadedProp]
+  }, startupDelay)
 }
 
 function destructor () {
-  storeOff('users-updated', refreshContentScripts)
-  storeDestroy()
+  destroyStatus()
+  destroyDashboardEvents()
 
+  storeOff('users-updated', usersUpdated)
+
+  destroyStore()
   destroyKeyboard()
   destroyBubble()
   destroyDialog()
-  destroyStatus()
-  destroySandbox()
   destroyPage()
   destroyAttachments()
-  destroyDashboardEvents()
   destroyInsertEvent()
 
+  destroySandbox()
+
+  initAbortController.abort()
+  initAbortController = new AbortController()
   settingsCache = {}
-  destroyed = true
 }
 
 // destroy existing content script
@@ -131,7 +158,7 @@ document.dispatchEvent(new CustomEvent(eventDestroy))
 document.addEventListener(eventDestroy, destructor, {once: true})
 
 let settingsCache = {}
-function refreshContentScripts () {
+async function usersUpdated () {
   // run only if we already have settings cached,
   // when content components were initialized.
   if (!Object.keys(settingsCache).length) {
@@ -139,14 +166,12 @@ function refreshContentScripts () {
   }
 
   // restart the content components if any of the settings changed
-  getSettings()
-    .then((settings) => {
-      const settingsChanged = !isEqual(settings, settingsCache)
-      if (settingsChanged) {
-        destructor()
-        init(settings)
-      }
-    })
+  const settings = await getSettings()
+  const settingsChanged = !isEqual(settings, settingsCache)
+  if (settingsChanged) {
+    destructor()
+    startup()
+  }
 }
 
 startup()

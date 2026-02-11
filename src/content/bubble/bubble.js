@@ -9,7 +9,6 @@ import { getExtensionData, trigger, on, off } from '../../store/store-content.js
 import { isContentEditable } from '../editors/editor-contenteditable.js'
 import { isTextfieldEditor } from '../editors/editor-textfield.js'
 
-import getEventTarget from '../utils/event-target.js'
 import getActiveElement from '../utils/active-element.js'
 import bubbleAllowlistPrivate from './bubble-allowlist-private.js'
 
@@ -17,7 +16,11 @@ import bubbleStyles from './bubble.css'
 import bubbleIcon from '../../icons/briskine-logo-small-bare.svg?raw'
 
 let bubbleInstance = null
-let activeTextfield = null
+let globalAbortController = new AbortController()
+let globalListenerOptions = {
+  capture: true,
+  signal: globalAbortController.signal,
+}
 
 const maxHostWidthCssVar = '--max-host-width'
 const bubbleTopCssVar = '--bubble-top'
@@ -74,17 +77,37 @@ customElements.define(
   }
 )
 
-function focusTextfield (e) {
-  // used for showing the dialog completion
-  activeTextfield = getEventTarget(e)
+function handleTextfieldFocus (event) {
+  const path = event.composedPath()
+  // find the inner most root, to support nested shadow roots
+  const innermostRoot = path.find(node => node instanceof ShadowRoot)
+  const isTop = event.currentTarget === window
 
-  return showBubble(activeTextfield)
+  if (
+    // if this listener is attached to the top,
+    // and doesn't originate in a shadow root.
+    (isTop && !innermostRoot)
+    // this listener is attached to the innermost shadow root.
+    // required for nested shadow roots.
+    || event.currentTarget === innermostRoot
+  ) {
+    if (event.type === 'focusin') {
+      showBubble(path[0])
+    } else if (event.type === 'focusout') {
+      blurTextfield(event)
+    }
+  }
 }
 
 function blurTextfield (e) {
   // don't hide the bubble if the newly focused node is in the dialog.
-  // eg. when clicking the bubble.
-  if (e.relatedTarget && e.relatedTarget.closest(dialogTagName)) {
+  // when pressing the bubble, or when focusing inside the dialog.
+  const target = e.relatedTarget
+  const host = target?.getRootNode?.().host
+  if (
+    target?.tagName?.toLowerCase?.() === dialogTagName
+    || host?.tagName?.toLowerCase?.() === dialogTagName
+  ) {
     return
   }
 
@@ -122,97 +145,6 @@ export async function setup (settings = {}) {
   }
 }
 
-let shadowRoots = []
-let shadowObserver = null
-
-function findAllShadowRoots (node, roots = []) {
-  // if the current node has a shadow root, add it to our list.
-  if (node.shadowRoot) {
-    roots.push(node.shadowRoot)
-    // search for more shadow roots *inside* this one.
-    findAllShadowRoots(node.shadowRoot, roots)
-  }
-
-  // traverse through all child elements of the current node.
-  for (const child of node.children) {
-    findAllShadowRoots(child, roots)
-  }
-
-  return roots
-}
-
-function addShadowFocusEvents (parent) {
-  const newShadowRoots = findAllShadowRoots(parent)
-  newShadowRoots.forEach((shadow) => {
-    if (!shadowRoots.includes(shadow)) {
-      shadowRoots.push(shadow)
-      shadow.addEventListener('focusin', focusTextfield, true)
-      shadow.addEventListener('focusout', blurTextfield, true)
-    }
-  })
-}
-
-function removeShadowFocusEvents (shadow) {
-  shadow.removeEventListener('focusin', focusTextfield, true)
-  shadow.removeEventListener('focusout', blurTextfield, true)
-}
-
-// focusin and focusout events are *composed*, so they bubble out of the shadow dom.
-// but *only if the shadow root host loses or gains focus*.
-// if all of the focusing and blurring happens inside the same shadow root,
-// only the shadow root will be able to catch those events.
-// only when we focus outside of the shadow root (or when we focus inside the shadow root, from outside),
-// will our regular document handler catch the event.
-// that's why we need to get all shadow roots from the dom, and attach the focusin and focusout
-// events on each one.
-// when we first focus inside the shadow root, or focus outside the shadow root, from inside,
-// the events will trigger twice.
-function enableShadowFocus () {
-  addShadowFocusEvents(document.body)
-
-  shadowObserver = new MutationObserver((records) => {
-    for (const record of records) {
-      for (const node of Array.from(record.addedNodes)) {
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          addShadowFocusEvents(node)
-        }
-      }
-
-      for (const node of Array.from(record.removedNodes)) {
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          const nodeShadowRoots = findAllShadowRoots(node)
-          shadowRoots = shadowRoots.filter((shadow) => {
-            if (nodeShadowRoots.includes(shadow)) {
-              removeShadowFocusEvents(shadow)
-              return false
-            }
-            return true
-          })
-        }
-      }
-    }
-  })
-
-  shadowObserver.observe(document.body, {
-    childList: true,
-    subtree: true,
-  })
-}
-
-function disableShadowFocus () {
-  if (shadowObserver) {
-    shadowObserver.disconnect()
-    shadowObserver = null
-
-    shadowRoots.forEach((shadow) => {
-      if (shadow) {
-        removeShadowFocusEvents(shadow)
-      }
-    })
-    shadowRoots = []
-  }
-}
-
 function create (settings = {}) {
   // bubble is created outside the body.
   // when textfields are focused, move it to the offsetParent for positioning.
@@ -221,14 +153,20 @@ function create (settings = {}) {
   bubbleInstance.setAttribute('shortcut', settings.dialog_shortcut)
   document.documentElement.appendChild(bubbleInstance)
 
-  // show the bubble on focus
-  document.addEventListener('focusin', focusTextfield, true)
-  document.addEventListener('focusout', blurTextfield, true)
+  window.addEventListener('focusin', handleTextfieldFocus, globalListenerOptions)
+  window.addEventListener('focusout', handleTextfieldFocus, globalListenerOptions)
 
-  enableShadowFocus()
+  // enable focus event support in shadow dom
+  window.addEventListener('focusin', hookShadowOnFocus, globalListenerOptions)
 
   const activeElement = getActiveElement()
   if (activeElement) {
+    // if active element is already in shadow root
+    const activeRoot = activeElement.getRootNode()
+    if (activeRoot instanceof ShadowRoot) {
+      hookShadowRoot(activeRoot)
+    }
+
     showBubble(activeElement)
   }
 }
@@ -242,10 +180,15 @@ function destroyInstance () {
     bubbleInstance = null
   }
 
-  document.removeEventListener('focusin', focusTextfield, true)
-  document.removeEventListener('focusout', blurTextfield, true)
+  globalAbortController.abort()
 
-  disableShadowFocus()
+  globalAbortController = new AbortController()
+  globalListenerOptions = {
+    capture: true,
+    signal: globalAbortController.signal,
+  }
+
+  shadowRootsRegistry = new WeakMap()
 }
 
 export function destroy () {
@@ -302,27 +245,27 @@ function isValidTextfield (elem) {
       )
       || isContentEditable(elem)
     )
-    // has a parent element node
-    && elem.parentElement
     // the parent is not the body
-    && elem.parentElement !== document.body
+    && elem?.parentElement !== document.body
   ) {
-    // sometimes disable for flex and grid parent
-    const parentStyles = window.getComputedStyle(elem.parentElement)
-    if (['flex', 'grid'].includes(parentStyles.display)) {
-      // flex-direction=row is not supported
-      if (
-        parentStyles.display === 'flex'
-        && parentStyles.flexDirection === 'row'
-      ) {
-        return false
-      }
+    if (elem.parentElement) {
+      // sometimes disable for flex and grid parent
+      const parentStyles = window.getComputedStyle(elem.parentElement)
+      if (['flex', 'grid'].includes(parentStyles.display)) {
+        // flex-direction=row is not supported
+        if (
+          parentStyles.display === 'flex'
+          && parentStyles.flexDirection === 'row'
+        ) {
+          return false
+        }
 
-      // check all editable element siblings,
-      // because we might have a parent flex/grid container,
-      // but with the editable element filling the entire container.
-      if (hasVisibleSiblings(elem)) {
-        return false
+        // check all editable element siblings,
+        // because we might have a parent flex/grid container,
+        // but with the editable element filling the entire container.
+        if (hasVisibleSiblings(elem)) {
+          return false
+        }
       }
     }
 
@@ -390,5 +333,38 @@ function hideBubble () {
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
+  }
+}
+
+// shadow root support for focusin/out.
+// focusin and focusout events are *composed*, so they bubble out of the shadow dom.
+// but *only if the shadow root host loses or gains focus*.
+// if all of the focusing and blurring happens inside the same shadow root,
+// only the shadow root will be able to catch those events.
+// only when we focus outside of the shadow root (or when we focus inside the shadow root, from outside),
+// will our regular document handler catch the event.
+// that's why we need to also need to attach the focusin/out listeners to the shadow roots.
+let shadowRootsRegistry = new WeakSet()
+
+function hookShadowRoot (shadow, event) {
+  if (shadow instanceof ShadowRoot && !shadowRootsRegistry.has(shadow)) {
+    shadowRootsRegistry.add(shadow)
+
+    shadow.addEventListener('focusin', handleTextfieldFocus, globalListenerOptions)
+    shadow.addEventListener('focusout', handleTextfieldFocus, globalListenerOptions)
+
+    // if this is the first time we hook this shadow root,
+    // the focusin event could already be in progress.
+    // manually trigger it because the newly attached listener might miss it.
+    if (event) {
+      handleTextfieldFocus(event)
+    }
+  }
+}
+
+function hookShadowOnFocus (event) {
+  const path = event.composedPath()
+  for (const node of path) {
+    hookShadowRoot(node, event)
   }
 }

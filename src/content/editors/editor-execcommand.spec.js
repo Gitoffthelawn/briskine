@@ -1,6 +1,10 @@
-import { expect, describe, it, beforeAll, afterAll } from 'vitest'
+import { expect, describe, it, beforeAll, afterAll, beforeEach } from 'vitest'
 
 import { insertExecCommandTemplate } from './editor-execcommand.js'
+
+function isFirefox (task) {
+  return task.file.projectName.includes('(firefox)')
+}
 
 describe('editor ExecCommand', () => {
   let editable
@@ -10,90 +14,61 @@ describe('editor ExecCommand', () => {
     document.body.appendChild(editable)
   })
 
-  it('should insert template into contenteditable', async () => {
+  beforeEach(() => {
     editable.innerHTML = ''
     editable.focus()
+  })
 
+  it('should insert template into contenteditable', async () => {
     await insertExecCommandTemplate({
       html: '<div>test</div>',
-      element: editable,
-      focusNode: editable,
-      word: {
-        start: 0,
-        end: 0,
-        text: ''
-      },
-      template: {
-        shortcut: ''
-      }
     })
 
     expect(editable.innerHTML).to.equal('<div>test</div>')
   })
 
-  it('should insert template into contenteditable=plaintext-true', async () => {
-    editable.innerHTML = ''
-    editable.focus()
+  it('should insert template into contenteditable=plaintext-only', async ({ task }) => {
     editable.setAttribute('contenteditable', 'plaintext-only')
 
     await insertExecCommandTemplate({
       text: 'test\ntest2\n[/image.png]',
-      element: editable,
-      focusNode: editable,
-      word: {
-        start: 0,
-        end: 0,
-        text: ''
-      },
-      template: {
-        shortcut: ''
-      }
     })
 
-    expect(editable.innerHTML).to.equal('test<div>test2</div><div>[/image.png]</div>')
+    const chromiumOutput = 'test<div>test2</div><div>[/image.png]</div>'
+    const firefoxOutput = '<div>test</div><div>test2</div><div>[/image.png]</div>'
+    if (isFirefox(task)) {
+      expect(editable.innerHTML).to.equal(firefoxOutput)
+    } else {
+      expect(editable.innerHTML).to.equal(chromiumOutput)
+    }
+
     editable.setAttribute('contenteditable', 'true')
   })
 
   it('should insert template into contenteditable', async () => {
-    editable.innerHTML = ''
-    editable.focus()
-
     await insertExecCommandTemplate({
       html: '<div>test</div>',
-      element: editable,
-      focusNode: editable,
-      word: {
-        start: 0,
-        end: 0,
-        text: ''
-      },
-      template: {
-        shortcut: ''
-      }
     })
 
     expect(editable.innerHTML).to.equal('<div>test</div>')
   })
 
-  it('should insert template into contenteditable, with preceding text', async () => {
+  it('should insert template into contenteditable, with preceding text', async ({ task }) => {
     editable.innerHTML = '<div>pre</div>'
     window.getSelection().setBaseAndExtent(editable.firstChild.firstChild, 3, editable.firstChild.firstChild, 3)
 
     await insertExecCommandTemplate({
       html: '<div>template <img src="#" alt="image"></div>',
-      element: editable,
-      focusNode: window.getSelection().focusNode,
-      word: {
-        start: 0,
-        end: 0,
-        text: ''
-      },
-      template: {
-        shortcut: ''
-      }
     })
 
-    expect(editable.innerHTML).to.equal('<div>pretemplate <img src="#" alt="image"></div>')
+    const chromiumOutput = '<div>pretemplate <img src="#" alt="image"></div>'
+    const firefoxOutput = '<div>pre<div>template <img src="#" alt="image"></div></div>'
+
+    if (isFirefox(task)) {
+      expect(editable.innerHTML).to.equal(firefoxOutput)
+    } else {
+      expect(editable.innerHTML).to.equal(chromiumOutput)
+    }
   })
 
   afterAll(() => {

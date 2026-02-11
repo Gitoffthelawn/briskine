@@ -29,33 +29,40 @@ async function keyboardAutocomplete (e) {
   }
 
   const word = getWord(element)
-
-  if (word.text) {
-    // cache range
-    const cachedRange = getSelectionRange(element)
-
-    const template = await getTemplateByShortcut(word.text)
-    if (template) {
-      // prevent default when getTemplateByShortcut returns immediately
-      e.preventDefault()
-      e.stopImmediatePropagation()
-
-      // restore selection
-      element.focus({ preventScroll: true })
-      if (
-        isContentEditable(element)
-        && cachedRange
-      ) {
-        await setSelectionRange(element, cachedRange)
-      }
-
-      autocomplete({
-        element: element,
-        template: template,
-        word: word,
-      })
-    }
+  if (!word.text) {
+    return
   }
+
+  // cache range
+  const cachedRange = getSelectionRange(element)
+  // workaround for Quill v1 issues when restoring focus (only when not preventing default).
+  // if the editor adds a tab/space/character when pressing Tab, endOffset will change.
+  // cache and force restore it later.
+  const cachedEndOffset = cachedRange.endOffset
+
+  const template = await getTemplateByShortcut(word.text)
+  if (!template) {
+    return
+  }
+
+  // prevent default when getTemplateByShortcut returns immediately
+  e.preventDefault()
+  e.stopImmediatePropagation()
+
+  // restore selection
+  element.focus({ preventScroll: true })
+  if (
+    isContentEditable(element)
+    && cachedRange
+  ) {
+    // force restore endOfsset in case other characters were added after the shortcut.
+    cachedRange.setEnd(cachedRange.endContainer, cachedEndOffset)
+    await setSelectionRange(element, cachedRange)
+  }
+
+  autocomplete({
+    template,
+  })
 }
 
 let cachedKeyboardShortcut = ''

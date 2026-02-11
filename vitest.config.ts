@@ -30,11 +30,12 @@ export default defineConfig({
           headless: true,
           screenshotFailures: false,
           instances: [
-            { browser: 'chromium' }
+            { browser: 'webkit' },
+            { browser: 'chromium' },
+            { browser: 'firefox' },
           ],
         },
         setupFiles: './vitest.setup.ts',
-        globalSetup: './vitest.globalSetup.ts'
       }
     }]
   }

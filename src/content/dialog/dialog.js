@@ -19,7 +19,6 @@ import {bubbleTagName} from '../bubble/bubble.js'
 import {getEditableCaret, getContentEditableCaret, getDialogPosition} from './dialog-position.js'
 import autocomplete from '../autocomplete.js'
 import { getSelectionRange, setSelectionRange }  from '../utils/selection.js'
-import { getWord } from '../utils/word.js'
 import getActiveElement from '../utils/active-element.js'
 import {keybind, keyunbind} from '../keybind.js'
 import IconSearch from 'bootstrap-icons/icons/search.svg'
@@ -64,14 +63,22 @@ function Dialog (originalProps) {
   const [searchResults, setSearchResults] = createSignal([])
   const [searchQuery, setSearchQuery] = createSignal('')
 
+  let globalAbortController = new AbortController()
+  let globalListenerOptions = {
+    capture: true,
+    signal: globalAbortController.signal,
+  }
+
   let editor
-  let word
   let searchField
 
   let cachedRange
 
-  createEffect(() => {
-    if (visible() === true) {
+  createEffect((prev) => {
+    if (
+      visible() === true
+      && prev === false
+    ) {
       // activate the first item in the list
       const $list = element.querySelector(listSelector)
       if ($list) {
@@ -79,7 +86,10 @@ function Dialog (originalProps) {
       }
 
       element.classList.add(openAnimationClass)
-    } else {
+    } else if (
+      visible() === false
+      && prev == true
+    ) {
       element.classList.remove(openAnimationClass)
 
       window.requestAnimationFrame(() => {
@@ -93,7 +103,9 @@ function Dialog (originalProps) {
         element.removeAttribute(modalAttribute)
       })
     }
-  })
+
+    return visible()
+  }, false)
 
   function show (node) {
     // dialog is already visible
@@ -169,8 +181,6 @@ function Dialog (originalProps) {
     // cache selection details, to restore later
     cachedRange = getSelectionRange(editor)
 
-    word = getWord(editor)
-
     setVisible(true)
     const position = getDialogPosition(target, element, placement)
     element.style.top = `${position.top}px`
@@ -185,7 +195,7 @@ function Dialog (originalProps) {
     // give it a second before focusing.
     // in production, the search field is not focused on some websites (eg. google sheets, salesforce).
     setTimeout(() => {
-      searchField.focus()
+      searchField.focus({ preventScroll: true })
     })
 
     if (loading() === true) {
@@ -201,8 +211,6 @@ function Dialog (originalProps) {
 
     autocomplete({
       template: template,
-      element: editor,
-      word: word,
     })
 
     // close dialog
@@ -315,14 +323,8 @@ function Dialog (originalProps) {
     }
   }
 
-  function hideOnClick (e) {
-    if (
-      // clicking inside the dialog
-      !element.contains(e.composedPath()[0])
-      && visible()
-      // clicking the bubble
-      && e.target.tagName.toLowerCase() !== bubbleTagName
-    ) {
+  function hideOnFocusout (e) {
+    if (e.target === dialogInstance) {
       setVisible(false)
     }
   }
@@ -374,7 +376,7 @@ function Dialog (originalProps) {
     })
 
     // keyboard navigation and insert for templates
-    window.addEventListener('keydown', handleSearchFieldShortcuts, true)
+    window.addEventListener('keydown', handleSearchFieldShortcuts, globalListenerOptions)
     element.addEventListener('b-dialog-insert', (e) => {
       insertTemplate(e.detail)
       e.stopImmediatePropagation()
@@ -396,7 +398,7 @@ function Dialog (originalProps) {
           // focus the search field when closing the modals,
           // and returning to the list view.
           if (searchField) {
-            searchField.focus()
+            searchField.focus({ preventScroll: true })
           }
         }
 
@@ -411,32 +413,28 @@ function Dialog (originalProps) {
       }
     })
 
-    window.addEventListener('click', hideOnClick, true)
-    window.addEventListener('keydown', hideOnEsc, true)
+    window.addEventListener('focusout', hideOnFocusout, globalListenerOptions)
+    window.addEventListener('keydown', hideOnEsc, globalListenerOptions)
 
     // prevent Gmail from handling keydown.
     // any keys assigned to Gmail keyboard shortcuts are prevented
     // from being inserted in the search field.
-    window.addEventListener('keydown', stopTargetPropagation, true)
+    window.addEventListener('keydown', stopTargetPropagation, globalListenerOptions)
     // prevent Front from handling keyboard shortcuts
     // when we're typing in the search field.
-    window.addEventListener('keypress', stopTargetPropagation, true)
+    window.addEventListener('keypress', stopTargetPropagation, globalListenerOptions)
 
     // prevent parent page from handling focus events.
-    // fix interaction with our dialog in some modals (LinkedIn, Twitter).
+    // fix interaction with our dialog in some modals (LinkedIn).
     // prevent the page from handling the focusout event when switching focus to our dialog.
-    window.addEventListener('focusout', stopRelatedTargetPropagation, true)
-    window.addEventListener('focusin', stopTargetPropagation, true)
+    window.addEventListener('focusout', stopRelatedTargetPropagation, globalListenerOptions)
+    window.addEventListener('focusin', stopTargetPropagation, globalListenerOptions)
 
     // expose show on element
     element.show = show
   })
 
   onCleanup(() => {
-    window.removeEventListener('click', hideOnClick, true)
-    window.removeEventListener('keydown', hideOnEsc, true)
-    window.removeEventListener('keydown', handleSearchFieldShortcuts, true)
-
     storeOff('login', setAuthState)
     storeOff('logout', setAuthState)
 
@@ -444,11 +442,13 @@ function Dialog (originalProps) {
     storeOff('tags-updated', tagsUpdated)
     storeOff('extension-data-updated', extensionDataUpdated)
 
-    window.removeEventListener('keydown', stopTargetPropagation, true)
-    window.removeEventListener('keypress', stopTargetPropagation, true)
+    globalAbortController.abort()
 
-    window.removeEventListener('focusout', stopRelatedTargetPropagation, true)
-    window.removeEventListener('focusin', stopTargetPropagation, true)
+    globalAbortController = new AbortController()
+    globalListenerOptions = {
+      capture: true,
+      signal: globalAbortController.signal,
+    }
   })
 
   return (
