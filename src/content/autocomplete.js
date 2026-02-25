@@ -9,6 +9,8 @@ import htmlToText from './utils/html-to-text.js'
 import debug from '../debug.js'
 import { getWord, selectWord } from './utils/word.js'
 import { updateTemplateStats } from '../store/store-content.js'
+import { getActiveElement } from './utils/active-element.js'
+import { selectFirstCursor } from './cursors/cursors.js'
 
 import { insertPasteTemplate } from './editors/editor-paste.js'
 import { insertContentEditableTemplate } from './editors/editor-contenteditable.js'
@@ -24,7 +26,6 @@ import './plugins/gmail-mobile.js'
 import './plugins/linkedin.js'
 import './plugins/linkedin-sales-navigator.js'
 import './plugins/facebook.js'
-import getActiveElement from './utils/active-element.js'
 
 const editors = [
   // order matters
@@ -77,10 +78,18 @@ export default async function autocomplete ({ template }) {
     html,
   })
 
+  try {
+    await selectFirstCursor({ text })
+  } catch (err) {
+    debug(['selectFirstCursor', err])
+  }
+
   await run('actions', {
     element,
     template,
     data,
+    html,
+    text,
   })
 
   await updateTemplateStats(template)

@@ -2,39 +2,45 @@
  * Key bindings
  */
 import Mousetrap from 'mousetrap'
-import 'mousetrap/plugins/global-bind/mousetrap-global-bind.js'
 
-let keyboard
-let cachedTargetBody
+import { isTextfieldEditor } from './editors/editor-textfield.js'
+import { isContentEditable } from './editors/editor-contenteditable.js'
+import { getActiveElement } from './utils/active-element.js'
 
-export function keybind (key = '', callback = () => {}) {
-  if (
-    // initialize mousetrap only on first keybind,
-    // to delay adding keydown/keyup/keypress event listeners.
-    // mousetrap adds them immediately when it self-initializes.
-    // we need to be able to delay adding them
-    // for websites which remove them on load (eg. salesforce).
-    !keyboard ||
-    // when the document body was rewrote (eg. in an iframe, where we have multiple startup retries)
-    // we need to re-initialize mousetrap,
-    // to re-attach the event listeners.
-    (
-      keyboard.target &&
-      keyboard.target.body &&
-      keyboard.target.body !== cachedTargetBody
-    )
-  ) {
-    keyboard = new Mousetrap(document, true)
-    cachedTargetBody = document.body
+Mousetrap.prototype.stopCallback = function () {
+  const element = getActiveElement()
+  if (isTextfieldEditor(element) || isContentEditable(element)) {
+    return false
   }
 
-  return keyboard.bindGlobal(key, callback)
+  return true
+}
+
+let mt
+let abortController = new AbortController()
+
+export function keybind (key = '', callback = () => {}) {
+  // initialize mousetrap only on first keybind,
+  // to delay adding keydown/keyup/keypress event listeners.
+  // mousetrap adds them immediately when it self-initializes.
+  if (!mt) {
+    mt = new Mousetrap(window, {
+      capture: true,
+      signal: abortController.signal,
+    })
+  }
+
+  return mt.bind(key, callback)
 }
 
 export function keyunbind (key = '') {
-  if (keyboard) {
-    return keyboard.unbind(key)
+  if (mt) {
+    return mt.unbind(key)
   }
+}
 
-  return
+export function destroy () {
+  abortController.abort()
+  abortController = new AbortController()
+  mt = null
 }

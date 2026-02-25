@@ -13,21 +13,33 @@ import {
 import { eventDestroy } from '../config.js'
 import {isBlocklisted} from '../blocklist.js'
 
-import {setup as setupKeyboard, destroy as destroyKeyboard} from './keyboard.js'
-import {setup as setupBubble, destroy as destroyBubble} from './bubble/bubble.js'
-import {setup as setupStatus, destroy as destroyStatus} from './status.js'
-import {setup as setupDialog, destroy as destroyDialog} from './dialog/dialog.js'
-import {destroy as destroySandbox} from './sandbox/sandbox-parent.js'
-import {setup as setupPage, destroy as destroyPage} from './page/page-parent.js'
-import {setup as setupAttachments, destroy as destroyAttachments} from './attachments/attachments.js'
-import {setup as setupDashboardEvents, destroy as destroyDashboardEvents} from './dashboard-events-client.js'
-import {setup as setupInsertEvent, destroy as destroyInsertEvent} from './insert-template-event.js'
+import { setup as setupKeyboard, destroy as destroyKeyboard } from './keyboard.js'
+import { setup as setupCursors, destroy as destroyCursors } from './cursors/cursors.js'
+import { setup as setupBubble, destroy as destroyBubble } from './bubble/bubble.js'
+import { setup as setupStatus, destroy as destroyStatus } from './status.js'
+import { setup as setupDialog, destroy as destroyDialog } from './dialog/dialog.js'
+import { setup as setupPage } from './page/page-parent.js'
+import { setup as setupAttachments, destroy as destroyAttachments } from './attachments/attachments.js'
+import {
+  setup as setupDashboardEvents,
+  destroy as destroyDashboardEvents
+} from './dashboard-events-client.js'
+import { setup as setupInsertEvent, destroy as destroyInsertEvent } from './insert-template-event.js'
+import {
+  setup as setupActiveElement,
+  destroy as destroyActiveElement,
+} from './utils/active-element.js'
+import { destroy as destroySandbox} from './sandbox/sandbox-parent.js'
+import { destroy as destroyKeybind } from './keybind.js'
 import getEventTarget from './utils/event-target.js'
 import { isTextfieldEditor } from './editors/editor-textfield.js'
 import { isContentEditable } from './editors/editor-contenteditable.js'
-import getActiveElement from './utils/active-element.js'
+import { addFocusListeners } from './utils/shadow-focus.js'
+
+import debug from '../debug.js'
 
 const readyMessage = 'briskine-ready'
+let removeFocusListeners = () => {}
 
 function getParentUrl () {
   let url = window.location.href
@@ -43,23 +55,29 @@ function getParentUrl () {
 }
 
 async function init () {
-  initAbortController.abort()
-
   const settings = await getSettings()
 
   if (isBlocklisted(settings, getParentUrl())) {
     return false
   }
 
-  await Promise.allSettled([
+  const components = await Promise.allSettled([
     setupStore(),
     setupKeyboard(settings),
+    setupCursors(),
     setupBubble(settings),
     setupDialog(settings),
     setupPage(),
     setupAttachments(),
     setupInsertEvent(),
+    setupActiveElement(),
   ])
+
+  components.forEach((c) => {
+    if (c.status === 'rejected') {
+      debug(['component', c, c.reason], 'error')
+    }
+  })
 
   // update the content components if settings change
   settingsCache = {...settings}
@@ -68,11 +86,10 @@ async function init () {
   window.postMessage(readyMessage)
 }
 
-let initAbortController = new AbortController()
-
 function initOnFocus (e) {
   const target = getEventTarget(e)
   if (isTextfieldEditor(target) || isContentEditable(target)) {
+    removeFocusListeners()
     init()
   }
 }
@@ -101,23 +118,7 @@ async function startup () {
   setupStatus()
   setupDashboardEvents()
 
-  const options = {
-    capture: true,
-    signal: initAbortController.signal,
-  }
-  window.addEventListener('focusin', initOnFocus, options)
-  // in case an editable is already focused
-  const activeElement = getActiveElement()
-  if (activeElement) {
-    initOnFocus({ target: activeElement })
-
-    // in case the activeElement is non-editable inside a shadow.
-    // without this check, changing focus to an editable inside the same shadow
-    // root won't trigger focusin on document
-    if (document.activeElement?.shadowRoot) {
-      document.activeElement.shadowRoot.addEventListener('focusin', initOnFocus, options)
-    }
-  }
+  removeFocusListeners = addFocusListeners(initOnFocus, 'focusin')
 
   setTimeout(() => {
     // if the document was recreated (e.g., ckeditor4 dynamically crated iframe),
@@ -128,6 +129,8 @@ async function startup () {
 
     // cleanup
     delete document.body[loadedProp]
+    // reset retries
+    startupRetries = 0
   }, startupDelay)
 }
 
@@ -139,16 +142,17 @@ function destructor () {
 
   destroyStore()
   destroyKeyboard()
+  destroyCursors()
   destroyBubble()
   destroyDialog()
-  destroyPage()
   destroyAttachments()
   destroyInsertEvent()
+  destroyActiveElement()
 
+  destroyKeybind()
   destroySandbox()
 
-  initAbortController.abort()
-  initAbortController = new AbortController()
+  removeFocusListeners()
   settingsCache = {}
 }
 

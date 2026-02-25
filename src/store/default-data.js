@@ -107,7 +107,8 @@ export function getDefaultTemplates () {
       <div>subject: {{subject}}</div>
       <div>next week: {{moment add='7;days' format='DD MMMM'}}</div>
       <div>last week: {{moment subtract='7;days'}}</div>
-      <div>week number: {{moment week=''}}</div>
+      <div><span>we      ek number:</span>   <span>{{moment week=''}}</span></div>
+      <div>cursor: {{cursor}}</div>
       <div>choice: {{choice 'Hello, Hi, Hey'}}</div>
       <div>domain: {{domain to.email}}</div>
       <div><img src="https://www.briskine.com/images/promo-large.png" width="100" height="73"></div>
@@ -122,6 +123,30 @@ export function getDefaultTemplates () {
       cc: 'cc@briskine.com, cc2@briskine.com',
       bcc: 'bcc@briskine.com',
       from: 'support@briskine.com'
+    })
+
+    defaultTemplates.push({
+      title: 'cursors',
+      shortcut: 'cur',
+      body: `
+        <style>div {}</style>
+        <div>empty={{cursor}}</div>
+        <div>empty with space= {{cursor}}</div>
+        <!-- comment -->
+        <div>placeholder={{#cursor}}placeholder{{/cursor}}</div>
+        <div>placeholder from.first_name={{#cursor}}{{from.first_name}}{{/cursor}}</div>
+        <div>
+          styled placeholder= <span style="color: red; font-weight: bold">{{#cursor}}red{{/cursor}}</span>
+        </div>
+        <div>empty2={{cursor}}</div>
+        <div>
+          block=
+          {{#cursor}}<strong>block</strong>{{/cursor}}
+        </div>
+        <div>
+          block2= <span style="color: hotpink"><strong>{{#cursor}}block{{/cursor}}</strong></style>
+        </div>
+      `,
     })
 
     defaultTemplates.push({
