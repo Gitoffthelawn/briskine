@@ -175,7 +175,7 @@ function Dialog (originalProps) {
     }
 
     // cache editor,
-    // to use for inserting templates or restoring later.
+    // to use for restoring selection and inserting templates later.
     editor = getActiveElement()
 
     // cache selection details, to restore later
@@ -212,9 +212,6 @@ function Dialog (originalProps) {
     autocomplete({
       template: template,
     })
-
-    // close dialog
-    setVisible(false)
   }
 
   function stopPropagation (e, target) {
@@ -314,10 +311,17 @@ function Dialog (originalProps) {
   }
 
   async function restoreSelection () {
+    // will also hide dialog because of focusout
     editor.focus({ preventScroll: true })
+
     if (
       isContentEditable(editor)
       && cachedRange
+      // if the nodes change in the editor, the range containers move to the top.
+      // (e.g., linkedin message editor in shadow dom likes to re-create the
+      // entire editor dom structure on focus)
+      // this will also be true when the editor is empty, when focus() is enough.
+      && cachedRange.startContainer !== editor
     ) {
       await setSelectionRange(editor, cachedRange)
     }
@@ -337,7 +341,6 @@ function Dialog (originalProps) {
       // when closing our dialog.
       window.addEventListener('keyup', (e) => { e.stopPropagation() }, { capture: true, once: true })
 
-      setVisible(false)
       restoreSelection()
     }
   }
@@ -409,7 +412,6 @@ function Dialog (originalProps) {
       if (target.closest('.dialog-login-btn')) {
         e.preventDefault()
         openPopup()
-        setVisible(false)
       }
     })
 
